@@ -1,0 +1,13 @@
+{
+  "module_name": "orbbec-camera",
+  "namespace": "viam-labs",
+  "language": "python",
+  "resource_type": "component",
+  "resource_subtype": "camera",
+  "model_name": "orbbec",
+  "enable_cloud_build": true,
+  "initialize_git": false,
+  "generator_version": "0.1.0",
+  "generated_on": "2025-04-23T20:57:33.269482Z",
+  "module_readme_link": "README.md"
+}
