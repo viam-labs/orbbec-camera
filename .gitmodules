@@ -1,0 +1,4 @@
+[submodule "pyorbbecsdk"]
+	path = pyorbbecsdk
+	url = https://github.com/orbbec/pyorbbecsdk.git
+	branch = v2-main

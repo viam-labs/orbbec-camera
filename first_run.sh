@@ -4,10 +4,7 @@ set -euo pipefail
 
 cd $(dirname $0)
 
-# initialize submodule
-./install_requirements.sh
-
-VENV_NAME=".venv"
+VENV_NAME="${VIAM_MODULE_DATA}/.venv"
 
 # Create a virtual environment to run our code
 export PATH=$PATH:$HOME/.local/bin
@@ -26,12 +23,11 @@ if ! uv venv $VENV_NAME --python 3.10; then
   exit 1
 fi
 
-source "./$VENV_NAME/bin/activate"
+source "$VENV_NAME/bin/activate"
 
-if ! uv pip install -r requirements.txt; then
-  echo "unable to sync requirements to venv"
-  exit 1
-fi
+# if ! uv pip install -r requirements.txt; then
+#   echo "unable to sync requirements to venv"
+#   exit 1
+# fi
 
-# build and install pyorbbecksdk wheels
-./build_sdk.sh
+# uv pip install

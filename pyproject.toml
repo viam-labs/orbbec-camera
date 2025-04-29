@@ -1,0 +1,17 @@
+[project]
+name = "orbbec-camera"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "viam-sdk==0.45.2",
+  "typing-extensions",
+  "pillow",
+  "open3d",
+  "opencv-python",
+  "pyorbbecsdk",
+]
+
+[tool.uv.sources]
+pyorbbecsdk = { path = "./pyorbbecsdk/dist/pyorbbecsdk-2.0.9-cp310-cp310-linux_aarch64.whl" }
