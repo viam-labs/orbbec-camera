@@ -2,7 +2,7 @@
   "$schema": "https://dl.viam.dev/module.schema.json",
   "module_id": "viam-labs:orbbec-camera",
   "visibility": "public",
-  "url": "",
+  "url": "https://github.com/viam-labs/orbbec-camera",
   "description": "Modular camera component: orbbec",
   "models": [
     {
@@ -12,7 +12,6 @@
       "markdown_link": "README.md#model-viam-labsorbbec-cameraorbbec"
     }
   ],
-  "applications": null,
   "markdown_link": "README.md",
   "entrypoint": "./run.sh",
   "first_run": "./first_run.sh",

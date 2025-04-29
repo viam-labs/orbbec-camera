@@ -10,8 +10,5 @@ dependencies = [
   "pillow",
   "open3d",
   "opencv-python",
-  "pyorbbecsdk",
+  "numpy<2",
 ]
-
-[tool.uv.sources]
-pyorbbecsdk = { path = "./pyorbbecsdk/dist/pyorbbecsdk-2.0.9-cp310-cp310-linux_aarch64.whl" }

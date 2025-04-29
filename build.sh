@@ -16,6 +16,7 @@ source "./$VENV_NAME/bin/activate"
 uv build --wheel
 
 cp ./pyorbbecsdk/dist/*.whl ./dist/
+cp -r ./scripts/ ./dist/
 
 # uv run pyinstaller --onefile -p src src/main.py
 tar -czvf archive.tar.gz ./dist/ meta.json first_run.sh run.sh

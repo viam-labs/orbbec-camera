@@ -4,6 +4,9 @@ set -euo pipefail
 
 cd $(dirname $0)
 
+# Install udev rules
+sudo bash ./dist/install_udev_rules.sh
+
 VENV_NAME="${VIAM_MODULE_DATA}/.venv"
 
 # Create a virtual environment to run our code

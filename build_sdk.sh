@@ -8,7 +8,7 @@ if [ ! -d "pyorbbecsdk" ]; then
   exit 1
 fi
 
-sudo apt install -y cmake gcc
+sudo apt install -y cmake gcc clang
 
 # Build pyorbbecsdk
 cd pyorbbecsdk
