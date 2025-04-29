@@ -1,14 +1,15 @@
 from io import BytesIO
+import struct
 import sys
-import tempfile
-from typing import Any, ClassVar, Dict, Final, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
 
-import open3d as o3d
 import cv2
 import numpy as np
 from PIL import Image
+from google.protobuf.timestamp_pb2 import Timestamp
 from typing_extensions import Self
 from viam.components.camera import Camera
+from viam.errors import NotSupportedError
 from viam.media.video import CameraMimeType, NamedImage, ViamImage
 from viam.media.utils.pil import pil_to_viam_image
 from viam.proto.app.robot import ComponentConfig
@@ -30,7 +31,6 @@ try:
         Pipeline,
         Config,
         Context,
-        OBError,
         OBFormat,
         OBSensorType,
         OBStreamType,
@@ -42,7 +42,6 @@ except ImportError:
     print("Error: pyorbbecsdk is not installed or cannot be imported.")
     print("Please run: ./setup.sh")
     sys.exit(1)
-
 
 class Orbbec(Camera, EasyResource):
     # To enable debug-level logging, either run viam-server with the --debug option,
@@ -96,10 +95,9 @@ class Orbbec(Camera, EasyResource):
                 "No Orbbec devices found. Please connect a device and try again."
             )
 
-        self.logger.info(f"Found {device_count} Orbbec device(s)")
         device = device_list.get_device_by_index(0)
         device_info = device.get_device_info()
-        self.logger.info(
+        self.logger.debug(
             f"Device name: {device_info.get_name()}, PID: {device_info.get_pid()}, Serial Number: {device_info.get_serial_number()}"
         )
         self.pipeline = Pipeline(device)
@@ -108,14 +106,7 @@ class Orbbec(Camera, EasyResource):
         color_profile_list = self.pipeline.get_stream_profile_list(
             OBSensorType.COLOR_SENSOR
         )
-        self.logger.info(f"Available color profiles: {len(color_profile_list)}")
-        try:
-            color_profile = color_profile_list.get_video_stream_profile(
-                0, 720, OBFormat.RGB, 30
-            )
-        except OBError as err:
-            color_profile = color_profile_list.get_default_video_stream_profile()
-            self.logger.warn(f"Unable to set RGB format, using {color_profile}")
+        color_profile = color_profile_list.get_default_video_stream_profile()
         self.config.enable_stream(color_profile)
 
         depth_profile_list = self.pipeline.get_stream_profile_list(
@@ -135,84 +126,125 @@ class Orbbec(Camera, EasyResource):
         timeout: Optional[float] = None,
         **kwargs,
     ) -> ViamImage:
-        self.logger.info(f"get_image - mime_type: {mime_type}")
+        self.logger.debug(f"get_image - mime_type: {mime_type}")
+        if not mime_type:
+            mime_type = CameraMimeType.JPEG
+
         frames = self.pipeline.wait_for_frames(100)
         if frames is None:
             return
-        color_frame = frames.get_color_frame()
+        frame = None
 
-        if color_frame is None:
+        if mime_type == CameraMimeType.VIAM_RAW_DEPTH:
+            frame = frames.get_depth_frame()
+
+        if mime_type == CameraMimeType.JPEG:
+            frame = frames.get_color_frame()
+
+        if frame is None:
             return
 
-        return self.process_frame_as_image(color_frame)
+        return self.process_frame_as_image(frame, mime_type)
 
-    def process_frame_as_image(self, frame) -> ViamImage:
+    def process_frame_as_image(self, frame, mime_type, raw=False) -> ViamImage:
         width = frame.get_width()
         height = frame.get_height()
-        color_format = frame.get_format()
 
-        try:
-            frame_data = frame.get_data()
-            self.logger.info(f"frame_data - type {type(frame_data)}")
-            self.logger.info(f"frame_data std_dev: {np.std(frame_data)}")
-            data = np.asanyarray(frame_data)
-            self.logger.info(f"Frame data: {data.shape} as type {data.dtype}")
-            self.logger.info(f"Frame data len: {len(data)}")
-            self.logger.info(
-                f"Frame format: {color_format}, width: {width}, height: {height}"
-            )
-            self.logger.info(f"Frame data std_dev: {np.std(data)}")
+        if mime_type == CameraMimeType.VIAM_RAW_DEPTH:
+            # Get the raw data as uint16 (2 bytes per pixel)
+            depth_data = np.frombuffer(frame.get_data(), dtype=np.uint16)
+            depth_data = depth_data.reshape((height, width))
+            
+            # Encode into Viam's raw depth format
+            # Required format: Magic number(8 bytes) + width(8 bytes) + height(8 bytes) + pixel data
+            MAGIC_NUMBER = struct.pack(">Q", 4919426490892632400)  # UTF-8 encoding for 'DEPTHMAP'
+            width_encoded = struct.pack(">Q", width)
+            height_encoded = struct.pack(">Q", height)
+            
+            # Create the header
+            depth_header = MAGIC_NUMBER + width_encoded + height_encoded
+            
+            # Combine header and raw depth data
+            raw_depth_bytes = depth_header + depth_data.tobytes()
+            
+            if raw:
+                return raw_depth_bytes
+            return ViamImage(raw_depth_bytes, CameraMimeType.VIAM_RAW_DEPTH)
 
-            if color_format == OBFormat.RGB:
-                rgb_data = np.resize(data, (height, width, 3))
-                self.logger.info(
-                    f"RGB data - shape: {rgb_data.shape}, as type {rgb_data.dtype}, len: {len(rgb_data)}"
-                )
+        if mime_type == CameraMimeType.JPEG:
+            color_format = frame.get_format()
+
+            try:
+                frame_data = frame.get_data()
+                data = np.asanyarray(frame_data)
+
+                if color_format == OBFormat.RGB:
+                    rgb_data = np.resize(data, (height, width, 3))
+                elif color_format == OBFormat.BGR:
+                    bgr_data = np.resize(data, (height, width, 3))
+                    rgb_data = cv2.cvtColor(bgr_data, cv2.COLOR_BGR2RGB)
+                elif color_format == OBFormat.MJPG:
+                    # Decode MJPG to BGR using OpenCV
+                    bgr_data = cv2.imdecode(data, cv2.IMREAD_COLOR)
+                    # Convert BGR to RGB for PIL
+                    rgb_data = cv2.cvtColor(bgr_data, cv2.COLOR_BGR2RGB)
+                else:
+                    self.logger.error(f"Unsupported color format: {color_format}")
+                    return
 
                 pil_image = Image.fromarray(rgb_data, "RGB")
-                self.logger.info(f"pil_image - {pil_image.width}x{pil_image.height}")
-                image_array = np.array(pil_image)
-                if image_array.size > 0:
-                    std_dev = np.std(image_array)
-                    if std_dev < 5.0:
-                        self.logger.warn(
-                            f"Image appears very uniform (std_dev: {std_dev})"
-                        )
-                buffer = BytesIO()
-                pil_image.save(buffer, format="JPEG")
+                if raw:
+                    output_buffer = BytesIO()
+                    pil_image.save(output_buffer, format="JPEG")
+                    rgb_bytes = output_buffer.getvalue()
+                    output_buffer.close()
+                    return rgb_bytes
+                return pil_to_viam_image(pil_image, CameraMimeType.JPEG)
 
-                raw_bytes = buffer.getvalue()
-                self.logger.info(f"raw_byes - size {len(raw_bytes)}")
-                buffer.close()
-                return ViamImage(raw_bytes, CameraMimeType.JPEG)
-            elif color_format == OBFormat.BGR:
-                bgr_data = np.resize(data, (height, width, 3))
-                rgb_data = cv2.cvtColor(bgr_data, cv2.COLOR_BGR2RGB)
-                return pil_to_viam_image(
-                    Image.fromarray(rgb_data, "RGB"), CameraMimeType.VIAM_RGBA
-                )
-            elif color_format == OBFormat.MJPG:
-                # Decode MJPG to BGR using OpenCV
-                bgr_data = cv2.imdecode(data, cv2.IMREAD_COLOR)
-                self.logger.info(f"bgr_data: {len(bgr_data)}")
-                # Convert BGR to RGB for PIL
-                rgb_data = cv2.cvtColor(bgr_data, cv2.COLOR_BGR2RGB)
-                return pil_to_viam_image(
-                    Image.fromarray(rgb_data, "RGBA"), CameraMimeType.VIAM_RGBA
-                )
-            else:
-                self.logger.error(f"Unsupported color format: {color_format}")
+            except Exception as err:
+                self.logger.error(f"Error converting frame to PIL Image: {err}")
                 return
 
-        except Exception as err:
-            self.logger.error(f"Error converting frame to PIL Image: {err}")
-            return
+        raise NotSupportedError(
+            f"mime_type {mime_type} is not supported. Please use {CameraMimeType.JPEG} or {CameraMimeType.VIAM_RAW_DEPTH}."
+        )
 
     async def get_images(
         self, *, timeout: Optional[float] = None, **kwargs
     ) -> Tuple[List[NamedImage], ResponseMetadata]:
-        self.logger.error("`get_images` is not implemented")
-        pass
+        images: List[NamedImage] = []
+        # For timestamp calculation later
+        timestamp: Optional[int] = None
+
+        frames = self.pipeline.wait_for_frames(100)
+        if frames is None:
+            return [], ResponseMetadata()
+
+        color_frame = frames.get_color_frame()
+        if color_frame is not None:
+            if timestamp is None:
+                timestamp = color_frame.get_timestamp_us()
+            rgb_bytes = self.process_frame_as_image(color_frame, CameraMimeType.JPEG, raw=True)
+            images.append(NamedImage("color", rgb_bytes, CameraMimeType.JPEG))
+
+        depth_frame = frames.get_depth_frame()
+        if depth_frame is not None:
+            if timestamp is None:
+                timestamp = depth_frame.get_timestamp_us()
+            depth_bytes = self.process_frame_as_image(depth_frame, CameraMimeType.VIAM_RAW_DEPTH, raw=True)
+            images.append(NamedImage("depth", depth_bytes, CameraMimeType.VIAM_RAW_DEPTH))
+
+        if len(images) > 0 and timestamp is not None:
+            seconds_float = timestamp / 1_000_000 
+            seconds = int(seconds_float)
+            nanoseconds = int((seconds_float - seconds) * 1_000_000_000)
+            metadata = ResponseMetadata(captured_at=Timestamp(seconds=seconds, nanos=nanoseconds))
+            return images, metadata
+
+
+        return [], ResponseMetadata()
+
+
 
     async def get_point_cloud(
         self,
@@ -221,75 +253,107 @@ class Orbbec(Camera, EasyResource):
         timeout: Optional[float] = None,
         **kwargs,
     ) -> Tuple[bytes, str]:
-        return [], CameraMimeType.PCD
-        # try:
-        #     # Get frames from the camera
-        #     frames = self.pipeline.wait_for_frames(100)
-        #     if not frames:
-        #         raise Exception("No frames received from camera")
+        """
+        Gets the next point cloud from the camera.
+        
+        Returns:
+            Tuple[bytes, str]: The point cloud data and its mime type.
+        """
+        try:
+            # Get frames from the camera
+            frames = self.pipeline.wait_for_frames(100)
+            if not frames:
+                raise Exception("No frames received from camera")
 
-        #     # Get depth and color frames
-        #     depth_frame = frames.get_depth_frame()
-        #     color_frame = frames.get_color_frame()
+            # Get depth and color frames
+            depth_frame = frames.get_depth_frame()
+            color_frame = frames.get_color_frame()
 
-        #     if not depth_frame:
-        #         raise Exception("No depth frame received")
+            if not depth_frame:
+                raise Exception("No depth frame received")
 
-        #     # Create and configure filters for point cloud generation
-        #     align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
-        #     point_cloud_filter = PointCloudFilter()
+            # Create and configure filters for point cloud generation
+            align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
+            point_cloud_filter = PointCloudFilter()
 
-        #     # Set the point cloud format based on whether we have color data
-        #     if color_frame is not None:
-        #         point_cloud_filter.set_create_point_format(OBFormat.RGB_POINT)
-        #     else:
-        #         point_cloud_filter.set_create_point_format(OBFormat.POINT)
+            # Set the point cloud format based on whether we have color data
+            has_color = color_frame is not None
+            # has_color = False
+            if has_color:
+                point_cloud_filter.set_create_point_format(OBFormat.RGB_POINT)
+            else:
+                point_cloud_filter.set_create_point_format(OBFormat.POINT)
 
-        #     # Align frames
-        #     aligned_frames = align_filter.process(frames)
-        #     if aligned_frames is None:
-        #         raise Exception("Failed to align frames")
+            # Align frames
+            aligned_frames = align_filter.process(frames)
+            if aligned_frames is None:
+                raise Exception("Failed to align frames")
 
-        #     # Generate point cloud
-        #     point_cloud_frame = point_cloud_filter.process(aligned_frames)
-        #     if point_cloud_frame is None:
-        #         raise Exception("Failed to generate point cloud")
+            # Generate point cloud
+            point_cloud_frame = point_cloud_filter.process(aligned_frames)
+            if point_cloud_frame is None:
+                raise Exception("Failed to generate point cloud")
 
-        #     # Extract points from point cloud frame
-        #     points = point_cloud_filter.calculate(point_cloud_frame)
+            # Extract points from point cloud frame
+            points = point_cloud_filter.calculate(point_cloud_frame)
 
-        #     # Create Open3D point cloud
-        #     pcd = o3d.geometry.PointCloud()
+            # Convert to meters (divide by 1000) and to float32
+            points_xyz = (np.array([p[:3] for p in points]) / 1000.0).astype(np.float32)
+            
+            # Handle colored vs non-colored point clouds
+            if has_color:
+                # Extract RGB colors
+                colors = np.array([p[3:6] for p in points]).astype(np.uint8).astype(np.uint32)
+                # points_xyz, colors = self._random_downsample_point_cloud(points_xyz, colors)
 
-        #     if color_frame is not None:
-        #         # Extract points and colors for RGB point cloud
-        #         points_array = np.array([p[:3] for p in points])  # XYZ points
-        #         colors_array = np.array([p[3:6] for p in points])  # RGB colors
-
-        #         # Add points and colors to Open3D point cloud
-        #         pcd.points = o3d.utility.Vector3dVector(points_array)
-        #         pcd.colors = o3d.utility.Vector3dVector(
-        #             colors_array / 255.0
-        #         )  # Normalize colors to [0, 1]
-        #     else:
-        #         # Extract points for non-colored point cloud
-        #         points_array = np.array([p[:3] for p in points])  # XYZ points
-
-        #         # Add points to Open3D point cloud
-        #         pcd.points = o3d.utility.Vector3dVector(points_array)
-
-        #     # Write the point cloud to PCD format in memory
-        #     # with tempfile.NamedTemporaryFile(delete=True) as tmp:
-        #     #     o3d.io.write_point_cloud(tmp.name, pcd, write_ascii=True)
-        #     #     tmp.flush()
-        #     #     tmp.seek(0)
-        #     #     pcd_data = tmp.read()
-        #     pcd_data = BytesIO().getvalue()
-
-        #     # Return the point cloud data and its MIME type
-        #     return pcd_data, CameraMimeType.PCD
-        # except Exception as e:
-        #     raise Exception(f"Failed to get point cloud: {str(e)}")
+                assert colors is not None
+                # Pack RGB into a single float as required by PCD format
+                rgb_int = (colors[:, 0] << 16) | (colors[:, 1] << 8) | colors[:, 2]
+                rgb_float = rgb_int.view(np.float32)
+                
+                # Concatenate the xyz coordinates with the packed rgb value
+                colored_points = np.column_stack((points_xyz, rgb_float))
+                
+                # Create PCD header for colored point cloud
+                version = "VERSION .7\n"
+                fields = "FIELDS x y z rgb\n"
+                size = "SIZE 4 4 4 4\n"
+                type_of = "TYPE F F F F\n"
+                count = "COUNT 1 1 1 1\n"
+                height = "HEIGHT 1\n"
+                viewpoint = "VIEWPOINT 0 0 0 1 0 0 0\n"
+                width = f"WIDTH {colored_points.shape[0]}\n"
+                points_count = f"POINTS {colored_points.shape[0]}\n"
+                data = "DATA binary\n"
+                header = f"{version}{fields}{size}{type_of}{count}{width}{height}{viewpoint}{points_count}{data}"
+                header_bytes = bytes(header, "UTF-8")
+                
+                # Combine header and point cloud data
+                pcd_data = header_bytes + colored_points.tobytes()
+            else:
+                # points_xyz, _ = self._random_downsample_point_cloud(points_xyz)
+                # Create PCD header for non-colored point cloud
+                version = "VERSION .7\n"
+                fields = "FIELDS x y z\n"
+                size = "SIZE 4 4 4\n"
+                type_of = "TYPE F F F\n"
+                count = "COUNT 1 1 1\n"
+                height = "HEIGHT 1\n"
+                viewpoint = "VIEWPOINT 0 0 0 1 0 0 0\n"
+                width = f"WIDTH {points_xyz.shape[0]}\n"
+                points_count = f"POINTS {points_xyz.shape[0]}\n"
+                data = "DATA binary\n"
+                header = f"{version}{fields}{size}{type_of}{count}{width}{height}{viewpoint}{points_count}{data}"
+                header_bytes = bytes(header, "UTF-8")
+                
+                # Combine header and point cloud data
+                pcd_data = header_bytes + points_xyz.tobytes()
+            
+            # Return the point cloud data and its MIME type
+            return pcd_data, CameraMimeType.PCD
+        except Exception as e:
+            self.logger.error(f"Failed to get point cloud: {str(e)}")
+            raise Exception(f"Failed to get point cloud: {str(e)}")
 
     async def get_properties(
         self, *, timeout: Optional[float] = None, **kwargs
@@ -302,27 +366,18 @@ class Orbbec(Camera, EasyResource):
         try:
             camera_params = self.pipeline.get_camera_param()
             intrinsics = IntrinsicParameters(
-                fx=camera_params.rgbIntrinsic.fx,
-                fy=camera_params.rgbIntrinsic.fy,
-                ppx=camera_params.rgbIntrinsic.cx,
-                ppy=camera_params.rgbIntrinsic.cy,
-                width=camera_params.rgbIntrinsic.width,
-                height=camera_params.rgbIntrinsic.height,
-            )
-
-            distortion = DistortionParameters(
-                k1=camera_params.rgbDistortion.k1,
-                k2=camera_params.rgbDistortion.k2,
-                p1=camera_params.rgbDistortion.p1,
-                p2=camera_params.rgbDistortion.p2,
-                k3=camera_params.rgbDistortion.k3,
+                focal_x_px=camera_params.rgbIntrinsic.fx,
+                focal_y_px=camera_params.rgbIntrinsic.fy,
+                center_x_px=camera_params.rgbIntrinsic.cx,
+                center_y_px=camera_params.rgbIntrinsic.cy,
+                width_px=camera_params.rgbIntrinsic.width,
+                height_px=camera_params.rgbIntrinsic.height,
             )
 
             return GetPropertiesResponse(
                 supports_pcd=True,
                 intrinsic_parameters=intrinsics,
-                distortion_parameters=distortion,
-                mime_types=["image/jpeg", "pointcloud/pcd"],
+                distortion_parameters=None,
             )
         except Exception as e:
             # If we can't get intrinsic parameters, return empty ones
@@ -330,7 +385,6 @@ class Orbbec(Camera, EasyResource):
                 supports_pcd=True,
                 intrinsic_parameters=IntrinsicParameters(),
                 distortion_parameters=DistortionParameters(),
-                mime_types=["image/jpeg", "pointcloud/pcd"],
             )
 
     async def do_command(
