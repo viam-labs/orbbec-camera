@@ -10,6 +10,8 @@ fi
 
 sudo apt install -y cmake gcc clang
 
+uv pip install setuptools
+
 # Build pyorbbecsdk
 cd pyorbbecsdk
 uv pip install -r requirements.txt
