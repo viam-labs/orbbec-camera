@@ -28,7 +28,7 @@ fi
 
 source "./$VENV_NAME/bin/activate"
 
-if ! uv pip install -r requirements.txt; then
+if ! uv sync; then
   echo "unable to sync requirements to venv"
   exit 1
 fi

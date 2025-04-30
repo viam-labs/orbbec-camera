@@ -28,9 +28,6 @@ fi
 
 source "$VENV_NAME/bin/activate"
 
-# if ! uv pip install -r requirements.txt; then
-#   echo "unable to sync requirements to venv"
-#   exit 1
-# fi
-
-# uv pip install
+echo "Installing dependencies"
+uv pip install ./dist/pyorbbecsdk-*.whl
+uv pip install ./dist/orbbec_camera-*.whl

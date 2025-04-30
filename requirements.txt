@@ -1,5 +1,0 @@
-viam-sdk==0.45.2
-typing-extensions
-
-# Include pyorbbecsdk requirements
--r pyorbbecsdk/requirements.txt

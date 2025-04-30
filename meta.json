@@ -8,8 +8,8 @@
     {
       "api": "rdk:component:camera",
       "model": "viam-labs:camera:orbbec",
-      "short_description": "Provide a short (100 characters or less) description of this model here",
-      "markdown_link": "README.md#model-viam-labsorbbec-cameraorbbec"
+      "short_description": "Get color and depth images from Orbbec cameras",
+      "markdown_link": "README.md#model-viam-labscameraorbbec"
     }
   ],
   "markdown_link": "README.md",

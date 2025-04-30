@@ -12,6 +12,7 @@ sudo apt install -y cmake gcc clang
 
 # Build pyorbbecsdk
 cd pyorbbecsdk
+uv pip install -r requirements.txt
 if [ -d "build" ]; then
   rm -rf build
 fi
@@ -23,11 +24,7 @@ make install
 cd ..
 
 # Build wheel
-# uv pip install wheel
 python setup.py bdist_wheel
 
-# Install the wheel
-uv pip install dist/*.whl
-
-echo "pyorbbecsdk built and installed successfully!"
+echo "pyorbbecsdk built successfully!"
 cd ..
