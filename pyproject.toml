@@ -5,7 +5,7 @@ description = "Viam module for supporting Orbbec 3D cameras"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "viam-sdk==0.82.0",
+  "viam-sdk==0.83.0",
   "typing-extensions",
   "pillow",
   "opencv-python",
