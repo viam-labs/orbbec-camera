@@ -1,23 +1,23 @@
-from io import BytesIO
 import struct
 import sys
+from io import BytesIO
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
-from PIL import Image
 from google.protobuf.timestamp_pb2 import Timestamp
+from PIL import Image
 from typing_extensions import Self
 from viam.components.camera import Camera
 from viam.errors import NotSupportedError
-from viam.media.video import CameraMimeType, NamedImage, ViamImage
 from viam.media.utils.pil import pil_to_viam_image
+from viam.media.video import CameraMimeType, NamedImage, ViamImage
 from viam.proto.app.robot import ComponentConfig
 from viam.proto.common import Geometry, ResourceName, ResponseMetadata
 from viam.proto.component.camera import (
+    DistortionParameters,
     GetPropertiesResponse,
     IntrinsicParameters,
-    DistortionParameters,
 )
 from viam.resource.base import ResourceBase
 from viam.resource.easy_resource import EasyResource
@@ -28,12 +28,12 @@ try:
     import pyorbbecsdk
     from pyorbbecsdk import (
         AlignFilter,
-        Pipeline,
         Config,
         Context,
         OBFormat,
         OBSensorType,
         OBStreamType,
+        Pipeline,
         PointCloudFilter,
     )
 
@@ -456,7 +456,7 @@ class Orbbec(Camera, EasyResource):
                 intrinsic_parameters=intrinsics,
                 distortion_parameters=None,
             )
-        except Exception as e:
+        except Exception:
             # If we can't get intrinsic parameters, return empty ones
             return GetPropertiesResponse(
                 supports_pcd=True,
